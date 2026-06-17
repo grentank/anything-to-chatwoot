@@ -1,0 +1,22 @@
+# Optional convenience wrapper. The service is fully self-contained (in-memory
+# state, no external dependencies), so `docker run` works just as well.
+services:
+  anything-to-chatwoot:
+    build: .
+    # Or use a published image instead of building locally:
+    # image: ghcr.io/grentank/anything-to-chatwoot:latest
+    container_name: anything-to-chatwoot
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '${PORT:-3000}:3000'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
