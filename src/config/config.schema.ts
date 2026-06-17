@@ -25,7 +25,7 @@ export const envSchema = z.object({
 
   // --- Telegram ---
   TELEGRAM_BOT_TOKEN: z.string().min(1),
-  TELEGRAM_INBOX_ID: z.coerce.number().int().positive(),
+  CHATWOOT_TELEGRAM_INBOX_ID: z.coerce.number().int().positive(),
   TELEGRAM_MODE: z.enum(['polling', 'webhook']).default('polling'),
   // Required only in webhook mode: public https domain that Telegram calls back.
   TELEGRAM_WEBHOOK_DOMAIN: z.string().url().optional(),
@@ -83,7 +83,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     telegram: {
       botToken: env.TELEGRAM_BOT_TOKEN,
-      inboxId: env.TELEGRAM_INBOX_ID,
+      inboxId: env.CHATWOOT_TELEGRAM_INBOX_ID,
       mode: env.TELEGRAM_MODE,
       webhookDomain: env.TELEGRAM_WEBHOOK_DOMAIN,
       webhookSecret: env.TELEGRAM_WEBHOOK_SECRET,

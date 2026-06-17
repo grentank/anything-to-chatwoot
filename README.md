@@ -81,7 +81,7 @@ behind ports (`RepositoryPort`, `OutboxPort`), so a durable backend
 1. In Chatwoot: **Settings -> Inboxes -> Add Inbox -> API**.
 2. Give it a name (e.g. "Telegram") and create it. Note the inbox id from the URL
   (`.../app/accounts/<account_id>/settings/inboxes/<inbox_id>`) — this is
-   `TELEGRAM_INBOX_ID`.
+   `CHATWOOT_TELEGRAM_INBOX_ID`.
 3. Add an **agent/bot** to the inbox so messages can be sent.
 4. Create a **webhook** so operator replies reach this service:
   **Settings -> Integrations -> Webhooks -> Add new webhook**
@@ -104,7 +104,7 @@ All configuration is via environment variables (validated at startup). Copy
 | `CHATWOOT_ACCOUNT_ID`       | yes          | —             | Numeric account id                                 |
 | `CHATWOOT_WEBHOOK_SECRET`   | no           | *(empty)*     | HMAC secret to verify webhooks (disabled if empty) |
 | `TELEGRAM_BOT_TOKEN`        | yes          | —             | Bot token from @BotFather                          |
-| `TELEGRAM_INBOX_ID`         | yes          | —             | Chatwoot API inbox id for this bot                 |
+| `CHATWOOT_TELEGRAM_INBOX_ID`| yes          | —             | Chatwoot API inbox id for this bot                 |
 | `TELEGRAM_MODE`             | no           | `polling`     | `polling` or `webhook`                             |
 | `TELEGRAM_WEBHOOK_DOMAIN`   | webhook only | —             | Public https URL of this service                   |
 | `TELEGRAM_WEBHOOK_SECRET`   | no           | *(empty)*     | Secret token Telegram echoes back                  |
