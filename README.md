@@ -30,7 +30,12 @@ entirely inside Chatwoot.
 - Relays **text, media, files, voice messages and video notes ("кружочки")** both ways.
 - Preserves **replies** (the quoted message is shown on both sides).
 - Renders Chatwoot **interactive messages** (`input_select`, `cards`) as Telegram
-inline keyboards; a tap is sent back into Chatwoot as the customer's reply.
+inline keyboards; a tap is sent back into Chatwoot as the customer's reply. Once
+the customer taps an option, the keyboard collapses and the chosen option is
+shown in its place, so the prompt cannot be answered twice. This is generic —
+no answer set is hardcoded, so any Chatwoot prompt (CSAT, CSI, custom
+`input_select`/`cards`) just works. Link buttons (`cards` with a URL) are left
+in place, since they open a page rather than submit an answer.
 - Optionally forwards Chatwoot **system/activity messages** (agent joined,
 conversation resolved) — off by default, toggle with `FORWARD_SYSTEM_MESSAGES`.
 - **Streams media** straight through; nothing is written to local disk.

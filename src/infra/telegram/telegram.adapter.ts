@@ -24,6 +24,24 @@ interface NormalizedMedia {
   contentType?: string;
 }
 
+/** A single callback button's payload, kept so a tap can be echoed and reflected. */
+interface CallbackEntry {
+  /** Value posted back to Chatwoot when the button is tapped. */
+  value: string;
+  /** Human-readable label shown on the button (used to reflect the choice). */
+  title: string;
+  /** Key of the prompt this button belongs to: `${chatId}:${messageId}`. */
+  promptKey?: string;
+}
+
+/** A sent interactive message, tracked so its keyboard can be collapsed on reply. */
+interface InteractivePrompt {
+  /** Original (already rendered) message text, so we can re-render on collapse. */
+  text: string;
+  /** Callback tokens of every button in this prompt. */
+  tokens: string[];
+}
+
 /**
  * Telegram integration built on Telegraf. Normalizes every inbound update into a
  * channel-neutral {@link InboundMessage} and renders outbound messages back to
@@ -38,9 +56,17 @@ export class TelegramAdapter implements MessengerAdapter {
   private readonly bot: Telegraf;
   private handler?: OnInboundMessage;
 
-  // Maps short callback tokens to the value echoed back to Chatwoot on tap.
-  private readonly callbackValues = new Map<string, string>();
+  // Maps short callback tokens to the button payload echoed back to Chatwoot on tap.
+  private readonly callbackTokens = new Map<string, CallbackEntry>();
+  // Tracks sent interactive prompts by `${chatId}:${messageId}` so their inline
+  // keyboard can be collapsed once any option is chosen.
+  private readonly prompts = new Map<string, InteractivePrompt>();
   private callbackSeq = 0;
+
+  // Upper bound for the in-memory callback/prompt maps; oldest entries are evicted.
+  private static readonly MAX_TRACKED = 5_000;
+  // Prefix shown in front of the chosen option after a tap.
+  private static readonly SELECTED_MARK = '\u2705'; // ✅
 
   constructor(@Inject(APP_CONFIG) private readonly config: AppConfig) {
     this.inboxId = config.telegram.inboxId;
@@ -242,14 +268,24 @@ export class TelegramAdapter implements MessengerAdapter {
 
   private async handleCallbackQuery(ctx: any): Promise<void> {
     const data: string | undefined = ctx.callbackQuery?.data;
-    const value = data ? this.callbackValues.get(data) : undefined;
+    const entry = data ? this.callbackTokens.get(data) : undefined;
+    const message = ctx.callbackQuery?.message;
 
     // Always acknowledge so Telegram stops the loading spinner.
     await ctx.answerCbQuery().catch(() => undefined);
 
-    if (!value || !this.handler) return;
+    // Collapse the keyboard so the options can no longer be tapped, mirroring the
+    // native behavior of single-choice prompts. Chatwoot itself never edits the
+    // message, so the bridge has to do it. Best-effort: never block the relay.
+    if (message) {
+      await this.collapsePrompt(ctx, message, entry).catch((err) =>
+        this.logger.warn(`Failed to collapse interactive keyboard: ${String(err)}`),
+      );
+    }
+
+    if (!entry || !this.handler) return;
     const from = ctx.callbackQuery.from;
-    const chat = ctx.callbackQuery.message?.chat;
+    const chat = message?.chat;
     if (!from || !chat) return;
 
     await this.handler({
@@ -258,13 +294,47 @@ export class TelegramAdapter implements MessengerAdapter {
       recipientId: String(chat.id),
       senderName: [from.first_name, from.last_name].filter(Boolean).join(' '),
       senderUsername: from.username,
-      text: value,
+      text: entry.value,
       attachments: [],
-      providerMessageId: ctx.callbackQuery.message
-        ? String(ctx.callbackQuery.message.message_id)
-        : undefined,
+      providerMessageId: message ? String(message.message_id) : undefined,
       raw: ctx.callbackQuery,
     });
+  }
+
+  /**
+   * Remove the inline keyboard of a tapped prompt. When we still know the prompt
+   * (not lost to a restart), re-render the original text with the chosen option
+   * appended so the customer keeps a record of their selection; otherwise just
+   * strip the buttons so a stale keyboard cannot be tapped again.
+   */
+  private async collapsePrompt(ctx: any, message: any, entry?: CallbackEntry): Promise<void> {
+    const promptKey = `${message.chat?.id}:${message.message_id}`;
+    const prompt = this.prompts.get(promptKey);
+
+    if (prompt && entry) {
+      const selected = `${TelegramAdapter.SELECTED_MARK} ${this.escapeHtml(entry.title)}`;
+      const base = prompt.text.trim();
+      const newText = base ? `${base}\n\n${selected}` : selected;
+      this.forgetPrompt(promptKey);
+      // Editing the text and omitting reply_markup also removes the keyboard.
+      await ctx.editMessageText(newText, { parse_mode: 'HTML' });
+      return;
+    }
+
+    // Unknown/stale prompt: at least drop the keyboard (empty inline_keyboard).
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+  }
+
+  /** Drop a prompt and all of its callback tokens once it has been answered. */
+  private forgetPrompt(promptKey: string): void {
+    const prompt = this.prompts.get(promptKey);
+    if (!prompt) return;
+    for (const token of prompt.tokens) this.callbackTokens.delete(token);
+    this.prompts.delete(promptKey);
+  }
+
+  private escapeHtml(input: string): string {
+    return input.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   // -------------------------------------------------------------------------
@@ -368,11 +438,14 @@ export class TelegramAdapter implements MessengerAdapter {
     interactive: OutboundInteractive,
     opts?: SendOptions,
   ): Promise<SentRef> {
+    const tokens: string[] = [];
     const inlineKeyboard = interactive.buttons.map((button) => {
       if (button.url) {
+        // Link buttons never emit a callback_query, so they need no tracking.
         return [{ text: button.title, url: button.url }];
       }
-      const token = this.storeCallbackValue(button.value);
+      const token = this.storeCallbackValue(button.value, button.title);
+      tokens.push(token);
       return [{ text: button.title, callback_data: token }];
     });
 
@@ -381,18 +454,33 @@ export class TelegramAdapter implements MessengerAdapter {
       reply_markup: { inline_keyboard: inlineKeyboard },
       ...this.replyExtra(opts),
     });
+
+    // Remember the prompt so the keyboard can be collapsed when a button is tapped.
+    if (tokens.length > 0) {
+      const promptKey = `${recipientId}:${sent.message_id}`;
+      for (const token of tokens) {
+        const stored = this.callbackTokens.get(token);
+        if (stored) stored.promptKey = promptKey;
+      }
+      this.prompts.set(promptKey, { text: interactive.text ?? '', tokens });
+      this.evictOldest(this.prompts, (key) => this.forgetPrompt(key));
+    }
+
     return { providerMessageId: String(sent.message_id) };
   }
 
-  private storeCallbackValue(value: string): string {
+  private storeCallbackValue(value: string, title: string): string {
     const token = `a2c:${this.callbackSeq++}`;
-    this.callbackValues.set(token, value);
-    // Keep the map bounded.
-    if (this.callbackValues.size > 5_000) {
-      const oldest = this.callbackValues.keys().next().value;
-      if (oldest !== undefined) this.callbackValues.delete(oldest);
-    }
+    this.callbackTokens.set(token, { value, title });
+    this.evictOldest(this.callbackTokens, (key) => this.callbackTokens.delete(key));
     return token;
+  }
+
+  /** Keep an insertion-ordered map bounded by evicting the oldest entry. */
+  private evictOldest(map: Map<string, unknown>, evict: (key: string) => void): void {
+    if (map.size <= TelegramAdapter.MAX_TRACKED) return;
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) evict(oldest);
   }
 
   private replyExtra(opts?: SendOptions): Record<string, unknown> {
