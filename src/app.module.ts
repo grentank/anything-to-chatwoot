@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from './config/config.module';
 import {
   CHATWOOT_PORT,
+  CONTACT_IDENTITY_STRATEGIES,
+  ContactIdentityStrategy,
   DEDUP_PORT,
   MESSENGER_ADAPTERS,
   MessengerAdapter,
@@ -10,10 +12,12 @@ import {
 } from './domain/ports';
 import { ChatwootClient } from './infra/chatwoot/chatwoot.client';
 import { TelegramAdapter } from './infra/telegram/telegram.adapter';
+import { TelegramContactIdentityStrategy } from './infra/telegram/telegram-contact-identity';
 import { InMemoryRepository } from './infra/store/in-memory.repository';
 import { InMemoryOutbox } from './infra/store/in-memory.outbox';
 import { InMemoryDedup } from './infra/store/in-memory.dedup';
 import { InboundService } from './application/inbound.service';
+import { ContactIdentityRegistry } from './application/contact-identity';
 import { OutboundService } from './application/outbound.service';
 import { MessengerRegistry } from './application/messenger-registry';
 import { OutboxProcessor } from './application/outbox.processor';
@@ -43,6 +47,17 @@ import { HealthController } from './interface/health.controller';
       useFactory: (telegram: TelegramAdapter): MessengerAdapter[] => [telegram],
       inject: [TelegramAdapter],
     },
+
+    // Per-channel contact shaping (lookup + creation payload).
+    TelegramContactIdentityStrategy,
+    {
+      provide: CONTACT_IDENTITY_STRATEGIES,
+      useFactory: (telegram: TelegramContactIdentityStrategy): ContactIdentityStrategy[] => [
+        telegram,
+      ],
+      inject: [TelegramContactIdentityStrategy],
+    },
+    ContactIdentityRegistry,
 
     // Application services.
     InboundService,

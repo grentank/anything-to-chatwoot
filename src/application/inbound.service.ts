@@ -11,6 +11,7 @@ import {
   RepositoryPort,
   REPOSITORY_PORT,
 } from '../domain/ports';
+import { ContactIdentityRegistry } from './contact-identity';
 
 /**
  * Messenger -> Chatwoot. Ensures the contact + conversation exist, then posts the
@@ -25,6 +26,7 @@ export class InboundService {
   constructor(
     @Inject(CHATWOOT_PORT) private readonly chatwoot: ChatwootPort,
     @Inject(REPOSITORY_PORT) private readonly repo: RepositoryPort,
+    private readonly identities: ContactIdentityRegistry,
     @Inject(MESSENGER_ADAPTERS) adapters: MessengerAdapter[],
   ) {
     for (const adapter of adapters) {
@@ -71,17 +73,9 @@ export class InboundService {
     if (cached) return cached;
 
     const inboxId = this.inboxIdFor(message);
-    const identifier = `${message.channel}:${message.senderId}`;
+    const spec = this.identities.build(message);
 
-    const contact = await this.chatwoot.ensureContact({
-      inboxId,
-      identifier,
-      name: message.senderName || message.senderUsername || identifier,
-      customAttributes: {
-        [`${message.channel}_user_id`]: message.senderId,
-        [`${message.channel}_username`]: message.senderUsername,
-      },
-    });
+    const contact = await this.chatwoot.ensureContact({ inboxId, spec });
 
     const conversationId = await this.chatwoot.ensureConversation({
       inboxId,

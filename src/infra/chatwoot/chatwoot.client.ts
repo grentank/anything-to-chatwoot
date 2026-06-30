@@ -8,6 +8,7 @@ import {
   ChatwootContactRef,
   ChatwootMessageRef,
   ChatwootPort,
+  ContactFilterQuery,
   CreateIncomingMessageInput,
   EnsureContactInput,
   EnsureConversationInput,
@@ -17,8 +18,8 @@ import {
   ChatwootContactConversationsResponse,
   ChatwootContactInbox,
   ChatwootCreateContactResponse,
+  ChatwootFilterContactsResponse,
   ChatwootMessageResponse,
-  ChatwootSearchContactsResponse,
 } from './chatwoot.types';
 
 const REUSABLE_STATUSES = new Set(['open', 'pending', 'snoozed']);
@@ -49,56 +50,85 @@ export class ChatwootClient implements ChatwootPort {
   // -------------------------------------------------------------------------
 
   async ensureContact(input: EnsureContactInput): Promise<ChatwootContactRef> {
-    const existing = await this.findContactByIdentifier(input.identifier);
+    const existing = await this.findContact(input.spec.lookup);
     if (existing) {
-      const sourceId = await this.ensureContactInbox(existing, input.inboxId);
+      // Keep the contact's own `identifier` (it may be a CRM auth_id) untouched;
+      // only make sure it is reachable from our inbox via a contact_inbox.
+      const sourceId = await this.ensureContactInbox(existing, input.inboxId, input.spec.sourceId);
       return { id: existing.id, sourceId };
     }
     return this.createContact(input);
   }
 
-  private async findContactByIdentifier(identifier: string): Promise<ChatwootContact | undefined> {
-    const res = await this.request<ChatwootSearchContactsResponse>(() =>
-      this.http.get('/contacts/search', { params: { q: identifier } }),
+  /** Try each lookup predicate via `POST /contacts/filter`; first match wins. */
+  private async findContact(lookup: ContactFilterQuery[]): Promise<ChatwootContact | undefined> {
+    for (const query of lookup) {
+      const match = await this.filterContacts(query);
+      if (match) return match;
+    }
+    return undefined;
+  }
+
+  private async filterContacts(query: ContactFilterQuery): Promise<ChatwootContact | undefined> {
+    const res = await this.request<ChatwootFilterContactsResponse>(() =>
+      this.http.post('/contacts/filter', {
+        payload: [
+          {
+            attribute_key: query.attributeKey,
+            filter_operator: query.filterOperator,
+            values: query.values,
+            query_operator: null,
+          },
+        ],
+      }),
     );
-    const contacts = res.payload ?? [];
-    return contacts.find((c) => c.identifier === identifier) ?? undefined;
+    return res.payload?.[0];
   }
 
   private async createContact(input: EnsureContactInput): Promise<ChatwootContactRef> {
+    const { spec } = input;
     const res = await this.request<ChatwootCreateContactResponse>(() =>
       this.http.post('/contacts', {
         inbox_id: input.inboxId,
-        name: input.name,
-        identifier: input.identifier,
-        custom_attributes: input.customAttributes ?? {},
+        source_id: spec.sourceId,
+        name: spec.name,
+        identifier: spec.identifier,
+        custom_attributes: spec.customAttributes,
+        additional_attributes: spec.additionalAttributes,
       }),
     );
 
     const contact = res.payload?.contact;
+    if (!contact?.id) {
+      throw new Error('Chatwoot did not return a contact id on contact creation');
+    }
+
+    // Passing `inbox_id` + `source_id` makes Chatwoot create the contact_inbox; we
+    // fall back to the source id we requested if the response omits it.
     const sourceId =
       res.payload?.contact_inbox?.source_id ??
-      this.extractSourceId(contact?.contact_inboxes, input.inboxId);
+      this.extractSourceId(contact.contact_inboxes, input.inboxId) ??
+      spec.sourceId;
 
-    if (!contact?.id || !sourceId) {
-      throw new Error('Chatwoot did not return a contact id / source_id on contact creation');
-    }
     return { id: contact.id, sourceId };
   }
 
-  private async ensureContactInbox(contact: ChatwootContact, inboxId: number): Promise<string> {
+  private async ensureContactInbox(
+    contact: ChatwootContact,
+    inboxId: number,
+    desiredSourceId: string,
+  ): Promise<string> {
     const existing = this.extractSourceId(contact.contact_inboxes, inboxId);
     if (existing) return existing;
 
-    // Create a contact_inbox tying this contact to our inbox.
+    // Tie this contact to our inbox using our stable source id (e.g. the user id).
     const res = await this.request<ChatwootContactInbox & { payload?: ChatwootContactInbox }>(() =>
-      this.http.post(`/contacts/${contact.id}/contact_inboxes`, { inbox_id: inboxId }),
+      this.http.post(`/contacts/${contact.id}/contact_inboxes`, {
+        inbox_id: inboxId,
+        source_id: desiredSourceId,
+      }),
     );
-    const sourceId = res.source_id ?? res.payload?.source_id;
-    if (!sourceId) {
-      throw new Error('Chatwoot did not return a source_id when creating contact_inbox');
-    }
-    return sourceId;
+    return res.source_id ?? res.payload?.source_id ?? desiredSourceId;
   }
 
   private extractSourceId(

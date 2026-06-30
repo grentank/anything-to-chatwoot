@@ -52,6 +52,24 @@ export interface MessengerAdapter {
 }
 
 // ---------------------------------------------------------------------------
+// Contact identity port (per-channel contact shaping)
+// ---------------------------------------------------------------------------
+
+export const CONTACT_IDENTITY_STRATEGIES = Symbol('CONTACT_IDENTITY_STRATEGIES');
+
+/**
+ * Builds the {@link ContactSpec} for one channel's inbound message: how to look
+ * the contact up, and how to shape it on creation (identifier, source id, custom
+ * and additional attributes). A new messenger either relies on the generic
+ * default or contributes its own strategy to {@link CONTACT_IDENTITY_STRATEGIES}.
+ */
+export interface ContactIdentityStrategy {
+  /** Channel this strategy applies to; must match {@link InboundMessage.channel}. */
+  readonly channel: Channel;
+  build(message: InboundMessage): ContactSpec;
+}
+
+// ---------------------------------------------------------------------------
 // Chatwoot port
 // ---------------------------------------------------------------------------
 
@@ -63,12 +81,41 @@ export interface ChatwootContactRef {
   sourceId: string;
 }
 
-export interface EnsureContactInput {
-  inboxId: number;
-  /** Stable unique identifier per channel (e.g. `telegram:123456`). */
+export type ContactFilterOperator = 'equal_to' | 'not_equal_to' | 'contains' | 'does_not_contain';
+
+/** A single predicate for Chatwoot `POST /contacts/filter`. */
+export interface ContactFilterQuery {
+  /** Attribute name, e.g. a custom attribute key `telegram_user_id` or standard `identifier`. */
+  attributeKey: string;
+  filterOperator: ContactFilterOperator;
+  values: string[];
+}
+
+/**
+ * Channel-neutral description of how to find and (only if missing) create the
+ * Chatwoot contact for an inbound sender. Built per channel by a
+ * {@link ContactIdentityStrategy}, consumed by the {@link ChatwootPort}.
+ *
+ * The bridge never overwrites an existing contact's `identifier`: a contact that
+ * already lives in the CRM may carry its own `auth_id` there. `identifier` below
+ * is therefore only applied when the contact is created by the bridge.
+ */
+export interface ContactSpec {
+  /** Lookup predicates tried in order; the first that matches an existing contact wins. */
+  lookup: ContactFilterQuery[];
+  /** `identifier` for a brand-new contact only (e.g. `telegram:123456`). */
   identifier: string;
   name?: string;
-  customAttributes?: Record<string, unknown>;
+  /** `source_id` tying the contact to our inbox and reused when creating the conversation. */
+  sourceId: string;
+  customAttributes: Record<string, unknown>;
+  additionalAttributes: Record<string, unknown>;
+}
+
+export interface EnsureContactInput {
+  /** Chatwoot inbox this bridge instance is wired to for the sender's channel. */
+  inboxId: number;
+  spec: ContactSpec;
 }
 
 export interface EnsureConversationInput {

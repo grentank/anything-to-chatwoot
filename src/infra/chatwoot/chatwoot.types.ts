@@ -10,6 +10,8 @@ export interface ChatwootContact {
   id: number;
   name?: string;
   identifier?: string;
+  custom_attributes?: Record<string, unknown>;
+  additional_attributes?: Record<string, unknown>;
   contact_inboxes?: ChatwootContactInbox[];
 }
 
@@ -20,7 +22,8 @@ export interface ChatwootCreateContactResponse {
   };
 }
 
-export interface ChatwootSearchContactsResponse {
+/** Response of `POST /contacts/filter` (shares the contacts list shape). */
+export interface ChatwootFilterContactsResponse {
   payload?: ChatwootContact[];
 }
 

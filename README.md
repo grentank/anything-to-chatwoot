@@ -71,6 +71,28 @@ in-memory maps are just a cache plus the reply-threading index. The store sits
 behind ports (`RepositoryPort`, `OutboxPort`), so a durable backend
 (SQLite/Redis) can be added later without changing the core.
 
+### Contact resolution
+
+For every inbound message the bridge resolves a Chatwoot contact + conversation:
+
+1. **Cache** — if this sender was seen before, the cached `conversation_id` is reused.
+2. **Find** — `POST /contacts/filter` by a channel custom attribute (`telegram_user_id`,
+   `whatsapp_user_id`, ...). This finds contacts even when their `identifier` is a
+   CRM `auth_id` rather than `telegram:<id>`.
+3. **Create (only if missing)** — `POST /contacts` with `inbox_id`, `source_id` (the
+   messenger user id), `name`, `identifier` (`<channel>:<id>`), `custom_attributes`
+   and `additional_attributes`. An existing contact's `identifier` is **never**
+   overwritten, so a CRM `auth_id` is preserved.
+4. **Conversation** — reuse the contact's open/pending/snoozed conversation for this
+   inbox, or `POST /conversations` with `inbox_id` + `contact_id` + `source_id`.
+5. **Message** — `POST /conversations/{id}/messages`.
+
+How a contact is looked up and shaped is decided per channel by a
+`ContactIdentityStrategy` (`src/domain/ports.ts`). A generic strategy derives
+everything from the channel name, so a new messenger works with no extra code;
+register a dedicated strategy (e.g. `TelegramContactIdentityStrategy`) only when a
+channel needs more, such as extra `additional_attributes`.
+
 > Trade-off: on restart, in-flight retries and the reply-threading map are lost.
 > New messages keep working and re-link via Chatwoot; only replies to messages
 > sent before the restart will not show the quoted message.
